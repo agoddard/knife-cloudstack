@@ -548,7 +548,16 @@ module CloudstackClient
 
       url = "#{@api_url}?#{data}&signature=#{signature}"
 
-      response = Net::HTTP.get_response(URI.parse(url))
+      uri = URI(url)
+      if uri.scheme == 'https' then
+        proxy = URI("#{ENV['https_proxy']}")
+      else
+        proxy = URI("#{ENV['http_proxy']}")
+      end
+      http = Net::HTTP::Proxy("#{proxy.host}",proxy.port).start(uri.host, uri.port,:use_ssl =>  uri.scheme == 'https',:verify_mode => OpenSSL::SSL::VERIFY_NONE)
+      request = Net::HTTP::Get.new uri.request_uri
+      response = http.request request # Net::HTTPResponse object
+
 
       if !response.is_a?(Net::HTTPOK) then
         puts "Error #{response.code}: #{response.message}"
