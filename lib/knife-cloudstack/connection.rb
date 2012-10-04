@@ -106,10 +106,18 @@ module CloudstackClient
       json['virtualmachine'] || []
     end
 
+    def list_disks
+      params = {
+          'command' => 'listDiskOfferings'
+      }
+      json = send_request(params)
+      json['diskoffering'] || []
+    end
+
     ##
     # Deploys a new server using the specified parameters.
 
-    def create_server(host_name, service_name, template_name, zone_name=nil, network_names=[])
+    def create_server(host_name, service_name, template_name, disk_name=nil, zone_name=nil, network_names=[])
 
       if host_name then
         if get_server(host_name) then
@@ -129,6 +137,22 @@ module CloudstackClient
         puts "Error: Template '#{template_name}' is invalid"
         exit 1
       end
+
+      if (!!disk_name) then
+	      if ( disk_name =~ /(\D+):(\d+)/) then
+			disk_size = $2
+			disk_name = $1
+	      end
+	      disk = get_disk(disk_name)
+	      if !disk then
+		puts "Error: Disk '#{disk_name}' is invalid"
+		exit 1
+	      end
+	      if !disk_size.empty? && !disk['iscustomized'] then
+		puts "Error: You may not provide size for disk '#{disk_name}'"
+		exit 1
+	      end
+	end
 
       zone = zone_name ? get_zone(zone_name) : get_default_zone
       if !zone then
@@ -165,7 +189,8 @@ module CloudstackClient
           'networkids' => network_ids.join(',')
       }
       params['name'] = host_name if host_name
-
+      params['diskOfferingId'] = disk['id'] if !!disk && !disk.empty?
+      params['size'] = disk_size if !!disk_size && !disk_size.empty?
       json = send_async_request(params)
       json['virtualmachine']
     end
@@ -286,6 +311,21 @@ module CloudstackClient
       }
       json = send_request(params)
       json['serviceoffering'] || []
+    end
+
+    def get_disk(name)
+      params = {
+          'command' => 'listDiskOfferings',
+          'name' => name
+      }
+      json = send_request(params)
+      disk = json['diskoffering']
+
+      if !disk || disk.empty? then
+        return nil
+      end
+
+      disk.first
     end
 
     ##
@@ -547,17 +587,15 @@ module CloudstackClient
       signature = CGI.escape(signature)
 
       url = "#{@api_url}?#{data}&signature=#{signature}"
-
       uri = URI(url)
       if uri.scheme == 'https' then
-        proxy = URI("#{ENV['https_proxy']}")
+      	proxy = URI("#{ENV['https_proxy']}")
       else
-        proxy = URI("#{ENV['http_proxy']}")
+      	proxy = URI("#{ENV['http_proxy']}")
       end
       http = Net::HTTP::Proxy("#{proxy.host}",proxy.port).start(uri.host, uri.port,:use_ssl =>  uri.scheme == 'https',:verify_mode => OpenSSL::SSL::VERIFY_NONE)
       request = Net::HTTP::Get.new uri.request_uri
       response = http.request request # Net::HTTPResponse object
-
 
       if !response.is_a?(Net::HTTPOK) then
         puts "Error #{response.code}: #{response.message}"
