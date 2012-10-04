@@ -1,6 +1,10 @@
 #
 # Author:: Ryan Holmes (<rholmes@edmunds.com>)
 # Copyright:: Copyright (c) 2011 Edmunds, Inc.
+#
+# Stanislav Voroniy (<svoroniy@schubergphilis.com>)
+# Copyright:: Copyright (c) 2012 Schuberg Philis
+#
 # License:: Apache License, Version 2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +22,8 @@
 
 require 'chef/knife'
 require 'json'
+require 'em-winrm'
+require 'chef/knife/core/windows_bootstrap_context'
 
 module KnifeCloudstack
   class CsServerCreate < Chef::Knife
@@ -70,6 +76,11 @@ module KnifeCloudstack
            :description => "Allocate a public IP for this server",
            :boolean => true,
            :default => true
+
+    option :cloudstack_disk,
+           :short => "-D DISK",
+           :long => "--disk DISK",
+           :description => "The name of CloudStack disk oferring"
 
     option :chef_node_name,
            :short => "-N NAME",
@@ -181,6 +192,7 @@ module KnifeCloudstack
           hostname,
           locate_config_value(:cloudstack_service),
           locate_config_value(:cloudstack_template),
+          locate_config_value(:cloudstack_disk),
           locate_config_value(:cloudstack_zone),
           locate_config_value(:cloudstack_networks)
       )
@@ -193,14 +205,24 @@ module KnifeCloudstack
 
       return if config[:no_bootstrap]
 
-      print "\n#{ui.color("Waiting for sshd", :magenta)}"
+      distro = locate_config_value(:distro)
+      if (distro =~ /windows/)
+	port = 5985
+      else 
+	port = 22
+      end
 
-      print(".") until is_ssh_open?(public_ip) {
-        sleep BOOTSTRAP_DELAY
-        puts "\n"
-      }
+      print "\n#{ui.color("Waiting for port #{port}", :magenta)}"
 
-      bootstrap_for_node(public_ip).run
+      print(".") until is_port_open?(port, public_ip) 
+      sleep BOOTSTRAP_DELAY
+      puts "\n"
+
+      if port == 5985
+	bootstrap_for_winrm(public_ip).run
+      else
+	bootstrap_for_ssh(public_ip).run
+      end
 
       puts "\n"
       puts "#{ui.color("Name", :cyan)}: #{server['name']}"
@@ -261,9 +283,9 @@ module KnifeCloudstack
     end
 
     #noinspection RubyArgCount,RubyResolve
-    def is_ssh_open?(ip)
+    def is_port_open?(port,ip)
       s = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-      sa = Socket.sockaddr_in(22, ip)
+      sa = Socket.sockaddr_in(port, ip)
 
       begin
         s.connect_nonblock(sa)
@@ -290,12 +312,16 @@ module KnifeCloudstack
     end
 
 
-    def bootstrap_for_node(host)
+    def bootstrap_for_ssh(host)
       bootstrap = Chef::Knife::Bootstrap.new
       bootstrap.name_args = [host]
       bootstrap.config[:run_list] = config[:run_list]
       bootstrap.config[:ssh_user] = config[:ssh_user]
-      bootstrap.config[:ssh_password] = config[:ssh_password]
+      if @ssh_pass.empty? then
+        bootstrap.config[:ssh_password] = config[:ssh_password]
+      else
+        bootstrap.config[:ssh_password] = @ssh_pass
+      end
       bootstrap.config[:identity_file] = config[:identity_file]
       bootstrap.config[:chef_node_name] = config[:chef_node_name] if config[:chef_node_name]
       bootstrap.config[:prerelease] = config[:prerelease]
@@ -306,6 +332,22 @@ module KnifeCloudstack
       bootstrap.config[:environment] = config[:environment]
       # may be needed for vpc_mode
       bootstrap.config[:no_host_key_verify] = config[:no_host_key_verify]
+      bootstrap
+    end
+
+    def bootstrap_for_winrm(host)
+      bootstrap = Chef::Knife::BootstrapWindowsWinrm.new
+      bootstrap.name_args = [host]
+      bootstrap.config[:run_list] = config[:run_list]
+      bootstrap.config[:winrm_user] = config[:ssh_user]
+      bootstrap.config[:winrm_password] = config[:ssh_password]
+      bootstrap.config[:chef_node_name] = config[:chef_node_name] if config[:chef_node_name]
+      bootstrap.config[:prerelease] = config[:prerelease]
+      bootstrap.config[:bootstrap_version] = locate_config_value(:bootstrap_version)
+      bootstrap.config[:distro] = locate_config_value(:distro)
+      bootstrap.config[:template_file] = locate_config_value(:template_file)
+      bootstrap.config[:environment] = config[:environment]
+      #puts bootstrap.inspect
       bootstrap
     end
 
